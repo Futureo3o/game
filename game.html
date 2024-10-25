@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>세상에서 가장 어려운 게임</title>
+
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+      }
+
+      #contain {
+        position: relative;
+        text-align: center;
+      }
+
+      canvas {
+        display: block;
+        background-color: #b3b3ff;
+      }
+
+      #header,
+      #footer {
+        background-color: black;
+        height: 50px;
+      }
+
+      #death,
+      #stage {
+        color: white;
+        font-size: 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="contain">
+      <div id="header">
+        <div id="stage">
+          <b><span id="death_count">1</span>/30</b>
+        </div>
+      </div>
+      <canvas id="canvas" width="1000" height="600"></canvas>
+      <div id="footer">
+        <div id="death">
+          <b>DEATHS: <span id="deathCount">0</span></b>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      var canvas;
+      var ctx;
+      var canvasBuffer;
+      var bufferCtx;
+      var threadSpeed = 16; // 타이머 시간 주기
+
+      // 플레이어
+      var player;
+      var px, py, pw, ph; // 좌표 및 플레이어 크기
+
+      // 장애물
+      var obstacleSpeed = 6; // 장애물 속도 변수 7
+      var obstacle = [
+        { x: 250, y: 200, speed: obstacleSpeed, direction: 1 },
+        { x: 700, y: 250, speed: obstacleSpeed, direction: -1 },
+        { x: 250, y: 300, speed: obstacleSpeed, direction: 1 },
+        { x: 700, y: 350, speed: obstacleSpeed, direction: -1 },
+      ];
+
+      // 키 상태
+      var keyPressed = [];
+
+      var deathCount = 0; // 죽은 횟수를 저장하는 변수
+
+      // 게임 시작 시 초기화
+      window.addEventListener("load", initialize, false);
+      window.addEventListener("keydown", getKeyDown, false);
+      window.addEventListener("keyup", getKeyUp, false);
+
+      function initialize() {
+        // 게임의 초기 설정(캔버스 및 컨텍스트) 수행
+        canvas = document.getElementById("canvas");
+        if (canvas == null || canvas.getContext == null) return; // 캔버스가 존재하지 않거나 컨텍스트를 가져올 수 없는 경우 종료(안정성 체크)
+        ctx = canvas.getContext("2d");
+
+        // 캔버스 버퍼 설정
+        canvasBuffer = document.getElementById("canvas");
+        canvasBuffer.width = canvas.width;
+        canvasBuffer.height = canvas.height;
+        bufferCtx = canvasBuffer.getContext("2d");
+
+        // 플레이어 설정
+        setPlayer();
+
+        // update 함수를 threadSpeed 간격으로 반복 호출
+        setInterval(update, threadSpeed);
+      }
+
+      function update() {
+        // 현재 위치를 임시로 저장
+        let newX = px;
+        let newY = py;
+
+        // 플레이어 속도 3
+        var pSpeed = 3;
+
+        // 키 입력에 따라 임시 위치 업데이트
+        if (keyPressed[38]) {
+          newY -= pSpeed; // 위로 이동
+        }
+        if (keyPressed[40]) {
+          newY += pSpeed; // 아래로 이동
+        }
+        if (keyPressed[37]) {
+          newX -= pSpeed; // 왼쪽으로 이동
+        }
+        if (keyPressed[39]) {
+          newX += pSpeed; // 오른쪽으로 이동
+        }
+
+        // 맵의 경계선 안에 있는지 확인
+        if (isInsidePolygon(newX, newY)) {
+          px = newX; // 유효한 위치일 경우 위치 업데이트
+          py = newY;
+        }
+
+        // 장애물 이동
+        moveObstacle();
+        // 충돌 검사
+        crashObstacle();
+
+        drawAll(); // 모든 객체의 상태를 업데이트하고 화면을 그리는 함수
+      }
+
+      // 주어진 좌표(x, y)가 내부에 있는지 확인하는 함수
+      function isInsidePolygon(x, y) {
+        // 다각형의 꼭짓점 좌표 정의
+        const polygon = [
+          { x: 50, y: 150 },
+          { x: 200 - pw + 2, y: 150 },
+          { x: 200 - pw + 2, y: 400 },
+          { x: 250, y: 400 },
+          { x: 250, y: 200 },
+          { x: 700, y: 200 },
+          { x: 700, y: 150 },
+          { x: 950 - pw + 2, y: 150 },
+          { x: 950 - pw + 2, y: 450 - ph + 2 },
+          { x: 800, y: 450 - ph + 2 },
+          { x: 800, y: 200 - ph + 2 },
+          { x: 750 - pw + 2, y: 200 - ph + 2 },
+          { x: 750 - pw + 2, y: 400 - ph + 2 },
+          { x: 300 - pw + 2, y: 400 - ph + 2 },
+          { x: 300 - pw + 2, y: 450 - ph + 2 },
+          { x: 50, y: 450 - ph + 2 },
+        ];
+
+        let inside = false; // 내부 존재 여부 초기화
+        const n = polygon.length; // 다각형의 꼭짓점 수
+
+        /*
+        Ray Casting 알고리즘을 사용하여 주어진 점(x, y)이 다각형 내부에 있는지 확인
+        1. 다각형의 각 변에 대해 반복
+        2. 현재 좌표(xi, yi)와 이전 좌표(xj, yj)를 비교하여 y가 두 좌표 사이에 있는지 확인
+        3. x좌표가 교차하는지 확인하여 내부인지 외부인지 판별
+            교차하는 경우 inside 변수 토글
+        4. 다각형 내부에 있으면 true, 외부면 false 반환
+        */
+
+        // Ray Casting 알고리즘을 사용해 내부 존재 여부 확인
+        for (let i = 0, j = n - 1; i < n; j = i++) {
+          const xi = polygon[i].x,
+            yi = polygon[i].y;
+          const xj = polygon[j].x,
+            yj = polygon[j].y;
+
+          // 교차 여부 확인
+          const intersect =
+            yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+          if (intersect) inside = !inside; // 교차 시 내부 존재 여부 토글
+        }
+
+        return inside; // 다각형 안에 있으면 true, 아니면 false
+      }
+
+      function crashObstacle() {
+        let crashed = false; // 충돌 상태를 확인하기 위한 변수 초기화
+
+        // 플레이어의 중심 좌표 계산
+        const playerCenterX = px + pw / 2; // 플레이어의 중심 x 좌표
+        const playerCenterY = py + ph / 2; // 플레이어의 중심 y 좌표
+
+        for (var i = 0; i < obstacle.length; i++) {
+          var obs = obstacle[i];
+
+          // 장애물의 중심 좌표 계산
+          const obstacleCenterX = obs.x + 25; // 장애물의 중심 x 좌표
+          const obstacleCenterY = obs.y + 25; // 장애물의 중심 y 좌표
+          //
+
+          // x, y 좌표의 차이 계산
+          const dx = playerCenterX - obstacleCenterX; // x 좌표의 차이
+          const dy = playerCenterY - obstacleCenterY; // y 좌표의 차이
+
+          // 두 중심 간의 거리 계산 (피타고라스의 정리)
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          // 충돌 여부 판단
+          const combinedRadius = 10 + pw / 2 + 2; // 장애물 반지름 + 플레이어 반지름 + 정확한 충돌 감지를 위한 여유값
+
+          // 충돌 조건 확인 (플레이어 반지름 + 장애물 반지름)
+          if (distance < combinedRadius) {
+            crashed = true; // 충돌 시 true로 변경
+            break; // 충돌이 발생했으므로 반복문 종료
+          }
+        }
+
+        // 충돌이 발생했다면
+        if (crashed) {
+          // 플레이어 초기 위치
+          px = 125 - pw / 2;
+          py = 300 - ph / 2;
+
+          // 죽은 횟수 증가
+          deathCount++;
+          document.getElementById("deathCount").innerText = deathCount;
+        }
+      }
+
+      // 장애물 이동 처리
+      function moveObstacle() {
+        for (var i = 0; i < obstacle.length; i++) {
+          var obs = obstacle[i];
+
+          // 장애물 위치 업데이트
+          obs.x += obs.speed * obs.direction;
+
+          // 장애물의 방향 바꾸기
+          if (obs.x < 250 || obs.x > 700) {
+            obs.direction *= -1; // 방향 전환
+          }
+        }
+      }
+
+      function drawObstacle() {
+        for (var i = 0; i < obstacle.length; i++) {
+          var obs = obstacle[i];
+
+          ctx.beginPath();
+          // 장애물의 현재 위치에 원을 그려 장애물 생성
+          ctx.arc(obs.x + 25, obs.y + 25, 10, 0, 2 * Math.PI);
+          ctx.fillStyle = "#0000FF"; // 장애물 색상
+          ctx.fill();
+          ctx.strokeStyle = "black"; // 경계선 색상
+          ctx.lineWidth = 4;
+          ctx.stroke();
+          ctx.closePath();
+        }
+      }
+
+      function drawPlayer() {
+        // 플레이어 그리기
+        ctx.fillStyle = "#FF0000"; // 플레이어 색상
+        ctx.strokeStyle = "black"; // 경계선 색상
+        ctx.lineWidth = 4;
+
+        ctx.fillRect(px, py, pw, ph); // 플레이어(사각형) 그리기
+        ctx.strokeRect(px, py, pw, ph); // 경계선 그리기
+      }
+
+      function setPlayer() {
+        // 플레이어의 초기 위치와 크기 설정
+        pw = 30; // 플레이어 너비
+        ph = 30; // 플레이어 높이
+        px = 125 - pw / 2; // 초기 x 좌표
+        py = 300 - ph / 2; // 초기 y 좌표
+      }
+
+      function getKeyDown(e) {
+        keyPressed[e.keyCode] = true; // 눌린 키 상태 저장
+      }
+
+      function getKeyUp(e) {
+        keyPressed[e.keyCode] = false; // 뗀 키 상태 저장
+      }
+
+      // 맵 그리기
+      function drawMap() {
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = 4;
+
+        ctx.fillStyle = "#F7F7FF";
+        ctx.beginPath();
+        ctx.moveTo(50, 150); // 좌상단 좌표
+        ctx.lineTo(200, 150);
+        ctx.lineTo(200, 400);
+        ctx.lineTo(250, 400);
+        ctx.lineTo(250, 200);
+        ctx.lineTo(700, 200);
+        ctx.lineTo(700, 150);
+        ctx.lineTo(950, 150);
+        ctx.lineTo(950, 450);
+        ctx.lineTo(800, 450);
+        ctx.lineTo(800, 200);
+        ctx.lineTo(750, 200);
+        ctx.lineTo(750, 400);
+        ctx.lineTo(300, 400);
+        ctx.lineTo(300, 450);
+        ctx.lineTo(50, 450);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // 시작점 그리기
+      function drawStart() {
+        ctx.fillStyle = "#B5FEB4";
+        ctx.fillRect(52, 152, 146, 296);
+      }
+
+      // 도착점 그리기
+      function drawGoal() {
+        ctx.fillStyle = "#B5FEB4";
+        ctx.fillRect(802, 152, 146, 296);
+      }
+
+      function drawAll() {
+        // 버퍼의 내용(캔버스) 지우기, 매 프레임마다 버퍼(캔버스) 초기화
+        // clearRect(좌상단 좌표 x, y, width, height)
+        bufferCtx.clearRect(0, 0, canvasBuffer.width, canvasBuffer.height);
+
+        drawMap(); // 맵 생성
+        drawStart(); // 시작점 생성
+        drawGoal(); // 도착점 생성
+        drawPlayer(); // 플레이어 생성
+        drawObstacle(); // 장애물 생성
+
+        // 버퍼에 그려진 모든 요소를 캔버스에 표시
+        // drawImage(이미지(캔버스), 그려질 위치 좌표 x, y)
+        ctx.drawImage(canvasBuffer, 0, 0);
+      }
+    </script>
+  </body>
+</html>
